@@ -1,0 +1,6 @@
+{
+  "name": "OmniAsk AI - Intelligent Question Answering",
+  "description": "Ask any question and receive fast, well-structured, insightful answers powered by Gemini AI with web grounding, tailored response modes, and interactive follow-ups.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
