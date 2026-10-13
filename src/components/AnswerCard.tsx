@@ -9,13 +9,15 @@ import {
   ExternalLink,
   RotateCcw,
   Download,
-  Bookmark,
-  BookmarkCheck,
+  Star,
   ChevronDown,
   ChevronUp,
   Globe,
-  Share2,
   HelpCircle,
+  FileText,
+  FileCode,
+  AlertCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { Message, AnswerMode } from '../types';
 import { renderMarkdown, stripMarkdown } from '../utils/markdown';
@@ -25,6 +27,8 @@ interface AnswerCardProps {
   aiMessage: Message;
   onFollowUpClick: (followUpQuestion: string) => void;
   onReaskMode?: (question: string, mode: AnswerMode) => void;
+  onRegenerate?: () => void;
+  onRetry?: () => void;
   isLatest: boolean;
   onToggleBookmark?: () => void;
   isBookmarked?: boolean;
@@ -35,6 +39,8 @@ export const AnswerCard: React.FC<AnswerCardProps> = ({
   aiMessage,
   onFollowUpClick,
   onReaskMode,
+  onRegenerate,
+  onRetry,
   isLatest,
   onToggleBookmark,
   isBookmarked = false,
@@ -42,7 +48,6 @@ export const AnswerCard: React.FC<AnswerCardProps> = ({
   const [copied, setCopied] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [showSources, setShowSources] = useState(false);
-  const [showReaskMenu, setShowReaskMenu] = useState(false);
 
   // Copy answer to clipboard
   const handleCopy = async () => {
@@ -106,6 +111,7 @@ export const AnswerCard: React.FC<AnswerCardProps> = ({
   };
 
   const modeBadge = {
+    brainstorm: { label: 'Idea Lab', bg: 'bg-amber-500/10 text-amber-300 border-amber-500/20' },
     balanced: { label: 'Comprehensive', bg: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/20' },
     concise: { label: 'Concise', bg: 'bg-amber-500/10 text-amber-300 border-amber-500/20' },
     eli5: { label: 'ELI5', bg: 'bg-pink-500/10 text-pink-300 border-pink-500/20' },
@@ -119,8 +125,8 @@ export const AnswerCard: React.FC<AnswerCardProps> = ({
   return (
     <div className="space-y-4 my-6">
       {/* 1. User Question Card */}
-      <div className="flex items-start gap-3 justify-end pl-8">
-        <div className="flex flex-col items-end max-w-2xl">
+      <div className="flex items-start gap-3 justify-end pl-6 sm:pl-12">
+        <div className="flex flex-col items-end max-w-2xl w-full">
           <div className="flex items-center gap-2 mb-1">
             <span className={`text-[10px] uppercase font-semibold px-2 py-0.5 rounded-full border ${modeBadge.bg}`}>
               {modeBadge.label}
@@ -129,17 +135,43 @@ export const AnswerCard: React.FC<AnswerCardProps> = ({
               {new Date(userMessage.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
           </div>
-          <div className="rounded-2xl rounded-tr-sm bg-gradient-to-br from-indigo-600 to-indigo-700 text-white px-4 py-3 shadow-lg shadow-indigo-900/20 text-sm sm:text-base font-normal leading-relaxed">
-            {userMessage.text}
+
+          <div className="rounded-2xl rounded-tr-sm bg-gradient-to-br from-indigo-600 to-indigo-700 text-white px-4 py-3 shadow-lg shadow-indigo-900/20 text-sm sm:text-base font-normal leading-relaxed w-fit">
+            {/* Attached files preview in user message */}
+            {userMessage.attachments && userMessage.attachments.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-2 pb-2 border-b border-indigo-500/40">
+                {userMessage.attachments.map((file) => (
+                  <div
+                    key={file.id}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-indigo-900/60 border border-indigo-400/30 text-xs text-indigo-100"
+                  >
+                    {file.isImage ? (
+                      <img
+                        src={file.dataUrl}
+                        alt={file.name}
+                        className="w-5 h-5 rounded object-cover"
+                      />
+                    ) : file.type === 'application/pdf' ? (
+                      <FileText className="w-3.5 h-3.5 text-red-300" />
+                    ) : (
+                      <FileCode className="w-3.5 h-3.5 text-cyan-300" />
+                    )}
+                    <span className="truncate max-w-[120px] text-[11px]">{file.name}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div>{userMessage.text}</div>
           </div>
         </div>
+
         <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center shrink-0 mt-1 text-slate-300">
           <User className="w-4 h-4" />
         </div>
       </div>
 
       {/* 2. AI Answer Card */}
-      <div className="flex items-start gap-3 pr-4 sm:pr-8">
+      <div className="flex items-start gap-3 pr-2 sm:pr-8">
         <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-cyan-400 p-0.5 shrink-0 mt-1 shadow-md shadow-indigo-500/20">
           <div className="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
             <Sparkles className="w-4 h-4 text-indigo-400" />
@@ -164,6 +196,17 @@ export const AnswerCard: React.FC<AnswerCardProps> = ({
 
               {/* Action shortcuts */}
               <div className="flex items-center gap-1">
+                {onRegenerate && !aiMessage.isStreaming && (
+                  <button
+                    type="button"
+                    onClick={onRegenerate}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition cursor-pointer"
+                    title="Regenerate this answer"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={handleCopy}
@@ -186,44 +229,56 @@ export const AnswerCard: React.FC<AnswerCardProps> = ({
                   {isPlayingAudio ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
                 </button>
 
-                <div className="relative">
-                  <button
-                    type="button"
-                    onClick={() => handleDownload('markdown')}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition cursor-pointer"
-                    title="Export as Markdown"
-                  >
-                    <Download className="w-4 h-4" />
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => handleDownload('markdown')}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition cursor-pointer"
+                  title="Export as Markdown"
+                >
+                  <Download className="w-4 h-4" />
+                </button>
               </div>
             </div>
 
-            {/* Markdown rendered body */}
-            <div className="markdown-body">
-              {aiMessage.error ? (
-                <div className="p-3 rounded-lg bg-red-950/40 border border-red-500/30 text-red-300 text-sm">
-                  {aiMessage.error}
+            {/* Markdown rendered body / Error State */}
+            {aiMessage.error ? (
+              <div className="p-4 rounded-xl bg-red-950/40 border border-red-500/40 space-y-3">
+                <div className="flex items-center gap-2 text-red-300 font-semibold text-sm">
+                  <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                  <span>Unable to complete response</span>
                 </div>
-              ) : (
+                <p className="text-xs text-red-200/90 leading-relaxed">{aiMessage.error}</p>
+                {onRetry && (
+                  <button
+                    type="button"
+                    onClick={onRetry}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-900/60 hover:bg-red-800 border border-red-500/40 text-red-100 text-xs font-medium transition cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Retry Question</span>
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="markdown-body">
                 <div
                   dangerouslySetInnerHTML={{
                     __html: renderMarkdown(aiMessage.text || ''),
                   }}
                 />
-              )}
 
-              {aiMessage.isStreaming && !aiMessage.text && (
-                <div className="flex items-center gap-2 py-4 text-slate-400 text-sm">
-                  <div className="flex space-x-1">
-                    <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-                    <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
-                    <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce"></div>
+                {aiMessage.isStreaming && !aiMessage.text && (
+                  <div className="flex items-center gap-2 py-4 text-slate-400 text-sm">
+                    <div className="flex space-x-1">
+                      <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                      <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                      <div className="w-2 h-2 bg-indigo-500 rounded-full animate-bounce"></div>
+                    </div>
+                    <span>Analyzing context and structuring response...</span>
                   </div>
-                  <span>Thinking and structuring response...</span>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            )}
 
             {/* Web Grounding Sources Accordion */}
             {(sources.length > 0 || searchQueries.length > 0) && (
@@ -263,10 +318,10 @@ export const AnswerCard: React.FC<AnswerCardProps> = ({
                       </div>
                     )}
 
-                    {sources.length > 0 && (
+                    {sources.length > 0 ? (
                       <div className="space-y-1 pt-2">
                         <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                          Reference Sources:
+                          Verified Reference Sources:
                         </span>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
                           {sources.map((source, idx) => (
@@ -283,6 +338,10 @@ export const AnswerCard: React.FC<AnswerCardProps> = ({
                           ))}
                         </div>
                       </div>
+                    ) : (
+                      <p className="text-slate-400 text-xs italic pt-1">
+                        Live web search was executed, and the facts were verified without requiring external links.
+                      </p>
                     )}
                   </div>
                 )}
@@ -290,15 +349,16 @@ export const AnswerCard: React.FC<AnswerCardProps> = ({
             )}
 
             {/* Bottom Actions: Re-ask in different mode */}
-            {onReaskMode && !aiMessage.isStreaming && (
+            {onReaskMode && !aiMessage.isStreaming && !aiMessage.error && (
               <div className="mt-4 pt-3 border-t border-slate-800/60 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
                 <span className="text-[11px] text-slate-500">Need a different perspective?</span>
                 <div className="flex flex-wrap items-center gap-1.5">
-                  {(['eli5', 'concise', 'steps', 'technical', 'balanced'] as AnswerMode[])
+                  {(['brainstorm', 'eli5', 'concise', 'steps', 'technical', 'balanced'] as AnswerMode[])
                     .filter((m) => m !== (aiMessage.mode || 'balanced'))
                     .slice(0, 3)
                     .map((targetMode) => {
                       const labels: Record<AnswerMode, string> = {
+                        brainstorm: 'Brainstorm Ideas',
                         balanced: 'Comprehensive',
                         concise: 'Make Concise',
                         eli5: 'Explain Like I’m 5',

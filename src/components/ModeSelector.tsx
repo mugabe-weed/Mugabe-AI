@@ -1,6 +1,6 @@
 import React from 'react';
 import { AnswerMode, ModeOption } from '../types';
-import { Target, Zap, Baby, ListOrdered, GraduationCap, Globe, Check } from 'lucide-react';
+import { Target, Lightbulb, Zap, Baby, ListOrdered, GraduationCap, Globe, Check } from 'lucide-react';
 
 interface ModeSelectorProps {
   currentMode: AnswerMode;
@@ -17,6 +17,13 @@ const MODES: Array<{
   icon: React.ElementType;
   badgeColor: string;
 }> = [
+  {
+    id: 'brainstorm',
+    label: 'Idea Lab',
+    tagline: 'Prolific brainstorming & inventive solutions',
+    icon: Lightbulb,
+    badgeColor: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
+  },
   {
     id: 'balanced',
     label: 'Balanced',

@@ -3,13 +3,32 @@ import { Header } from './components/Header';
 import { ModeSelector } from './components/ModeSelector';
 import { QuestionInput } from './components/QuestionInput';
 import { AnswerCard } from './components/AnswerCard';
-import { PresetQuestions } from './components/PresetQuestions';
 import { SidebarHistory } from './components/SidebarHistory';
 import { InfoModal } from './components/InfoModal';
-import { Thread, Message, AnswerMode, GroundingMetadata } from './types';
-import { Sparkles, HelpCircle, ArrowDownCircle, BookOpen, Trash2 } from 'lucide-react';
+import { Thread, Message, AnswerMode, GroundingMetadata, AttachedFile } from './types';
+import { Sparkles, HelpCircle, ArrowDownCircle, BookOpen, Trash2, ArrowUpRight } from 'lucide-react';
 
 const STORAGE_KEY = 'mugabe_ai_threads_v1';
+
+// Useful, sleek suggestion prompt chips for the home screen
+const SUGGESTED_PROMPTS = [
+  {
+    title: '💡 10 innovative startup & app ideas using AI',
+    mode: 'brainstorm' as AnswerMode,
+  },
+  {
+    title: '💡 5 creative ways to market a product with $0 budget',
+    mode: 'brainstorm' as AnswerMode,
+  },
+  {
+    title: 'Explain Quantum Computing simply',
+    mode: 'eli5' as AnswerMode,
+  },
+  {
+    title: 'Step-by-step framework to master deep work',
+    mode: 'steps' as AnswerMode,
+  },
+];
 
 export default function App() {
   const [threads, setThreads] = useState<Thread[]>(() => {
@@ -56,11 +75,33 @@ export default function App() {
     scrollToBottom();
   }, [messages.length, isStreaming]);
 
+  // Stop in-flight generation
+  const handleStopGeneration = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsStreaming(false);
+    // Mark latest AI message as not streaming
+    setThreads((prev) =>
+      prev.map((thread) => {
+        if (thread.id !== currentThreadId) return thread;
+        return {
+          ...thread,
+          messages: thread.messages.map((m, idx) =>
+            idx === thread.messages.length - 1 && m.role === 'model'
+              ? { ...m, isStreaming: false, text: m.text ? `${m.text} \n\n*[Generation stopped by user]*` : 'Generation was stopped.' }
+              : m
+          ),
+        };
+      })
+    );
+  };
+
   // Create fresh thread
   const handleNewThread = () => {
-    if (isStreaming && abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      setIsStreaming(false);
+    if (isStreaming) {
+      handleStopGeneration();
     }
     const newId = `thread_${Date.now()}`;
     setCurrentThreadId(newId);
@@ -91,9 +132,8 @@ export default function App() {
 
   // Select thread from history
   const handleSelectThread = (threadId: string) => {
-    if (isStreaming && abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      setIsStreaming(false);
+    if (isStreaming) {
+      handleStopGeneration();
     }
     setCurrentThreadId(threadId);
   };
@@ -129,9 +169,10 @@ export default function App() {
   const handleSubmitQuestion = async (
     questionText: string,
     modeOverride?: AnswerMode,
+    attachments: AttachedFile[] = [],
     isFollowUp: boolean = false
   ) => {
-    if (!questionText.trim() || isStreaming) return;
+    if ((!questionText.trim() && attachments.length === 0) || isStreaming) return;
 
     const mode = modeOverride || currentMode;
 
@@ -151,6 +192,7 @@ export default function App() {
       text: questionText,
       timestamp: Date.now(),
       mode,
+      attachments: attachments.length > 0 ? attachments : undefined,
     };
 
     const aiPlaceholderMsg: Message = {
@@ -165,6 +207,10 @@ export default function App() {
     // Update state with user message and AI placeholder
     setThreads((prev) => {
       const existing = prev.find((t) => t.id === currentThreadId);
+      const displayTitle = questionText.trim()
+        ? questionText.slice(0, 60)
+        : attachments[0]?.name || 'Analyzed Document';
+
       if (existing) {
         return prev.map((t) =>
           t.id === currentThreadId
@@ -178,7 +224,7 @@ export default function App() {
       } else {
         const newThread: Thread = {
           id: currentThreadId,
-          title: questionText.slice(0, 60),
+          title: displayTitle,
           createdAt: Date.now(),
           updatedAt: Date.now(),
           messages: [userMsg, aiPlaceholderMsg],
@@ -189,7 +235,7 @@ export default function App() {
 
     setIsStreaming(true);
 
-    // Prepare history payload for context
+    // Prepare history payload for context (last 8 messages)
     const currentMsgs = currentThread?.messages || [];
     const historyPayload = currentMsgs.map((m) => ({
       role: m.role,
@@ -205,6 +251,12 @@ export default function App() {
           mode,
           enableSearch,
           history: historyPayload,
+          attachments: attachments.map((a) => ({
+            name: a.name,
+            type: a.type,
+            size: a.size,
+            dataUrl: a.dataUrl,
+          })),
         }),
         signal: controller.signal,
       });
@@ -218,6 +270,7 @@ export default function App() {
       if (!reader) throw new Error('ReadableStream not supported.');
 
       const decoder = new TextDecoder();
+      let sseBuffer = '';
       let accumulatedText = '';
       let groundingData: GroundingMetadata | undefined = undefined;
 
@@ -225,75 +278,139 @@ export default function App() {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
+        sseBuffer += decoder.decode(value, { stream: true });
 
-        let currentEvent = '';
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            currentEvent = line.replace('event: ', '').trim();
-          } else if (line.startsWith('data: ')) {
-            const dataStr = line.replace('data: ', '').trim();
-            try {
-              const data = JSON.parse(dataStr);
-              if (currentEvent === 'chunk' && data.text) {
-                accumulatedText += data.text;
-                setThreads((prev) =>
-                  prev.map((thread) => {
-                    if (thread.id !== currentThreadId) return thread;
-                    return {
-                      ...thread,
-                      messages: thread.messages.map((m) =>
-                        m.id === aiMessageId ? { ...m, text: accumulatedText } : m
-                      ),
-                    };
-                  })
-                );
-              } else if (currentEvent === 'grounding' && data.groundingMetadata) {
-                const gm = data.groundingMetadata;
-                const sources =
-                  gm.groundingChunks?.map((c: any) => ({
-                    title: c.web?.title || 'Web Source',
-                    url: c.web?.uri || '#',
-                  })) || [];
+        // Split on double newline (standard SSE event boundary)
+        const eventBlocks = sseBuffer.split('\n\n');
+        // Keep remainder (possibly incomplete block) in buffer
+        sseBuffer = eventBlocks.pop() || '';
 
-                groundingData = {
-                  webSearchQueries: gm.webSearchQueries || [],
-                  sources,
-                };
+        for (const block of eventBlocks) {
+          if (!block.trim()) continue;
 
-                setThreads((prev) =>
-                  prev.map((thread) => {
-                    if (thread.id !== currentThreadId) return thread;
-                    return {
-                      ...thread,
-                      messages: thread.messages.map((m) =>
-                        m.id === aiMessageId ? { ...m, groundingMetadata: groundingData } : m
-                      ),
-                    };
-                  })
-                );
-              } else if (currentEvent === 'error') {
-                throw new Error(data.error || 'Stream error occurred.');
-              }
-            } catch (jsonErr) {
-              // Ignore non-json or incomplete SSE chunks
+          let eventName = 'message';
+          let dataPayload = '';
+
+          const lines = block.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              eventName = line.slice(7).trim();
+            } else if (line.startsWith('data: ')) {
+              dataPayload = line.slice(6).trim();
             }
+          }
+
+          if (!dataPayload) continue;
+
+          try {
+            const data = JSON.parse(dataPayload);
+            if (eventName === 'chunk' && data.text) {
+              accumulatedText += data.text;
+              setThreads((prev) =>
+                prev.map((thread) =>
+                  thread.id === currentThreadId
+                    ? {
+                        ...thread,
+                        messages: thread.messages.map((m) =>
+                          m.id === aiMessageId ? { ...m, text: accumulatedText } : m
+                        ),
+                      }
+                    : thread
+                )
+              );
+            } else if (eventName === 'grounding' && data.groundingMetadata) {
+              const gm = data.groundingMetadata;
+              const sources =
+                gm.groundingChunks?.map((c: any) => ({
+                  title: c.web?.title || 'Web Source',
+                  url: c.web?.uri || '#',
+                })) || [];
+
+              groundingData = {
+                webSearchQueries: gm.webSearchQueries || [],
+                sources,
+              };
+
+              setThreads((prev) =>
+                prev.map((thread) =>
+                  thread.id === currentThreadId
+                    ? {
+                        ...thread,
+                        messages: thread.messages.map((m) =>
+                          m.id === aiMessageId ? { ...m, groundingMetadata: groundingData } : m
+                        ),
+                      }
+                    : thread
+                )
+              );
+            } else if (eventName === 'done') {
+              if (data.fullAnswer && !accumulatedText) {
+                accumulatedText = data.fullAnswer;
+              }
+            } else if (eventName === 'error') {
+              throw new Error(data.error || 'Streaming error occurred.');
+            }
+          } catch (jsonErr) {
+            console.warn('Incomplete or non-JSON SSE payload:', jsonErr);
           }
         }
       }
 
-      // Mark streaming as finished
+      // If stream finished with empty text (e.g. proxy buffering or edge case), fallback to non-streaming endpoint
+      if (!accumulatedText.trim()) {
+        console.warn('Stream returned empty answer, running non-streaming fallback...');
+        const fallbackRes = await fetch('/api/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            question: questionText,
+            mode,
+            enableSearch,
+            history: historyPayload,
+            attachments: attachments.map((a) => ({
+              name: a.name,
+              type: a.type,
+              size: a.size,
+              dataUrl: a.dataUrl,
+            })),
+          }),
+        });
+
+        if (fallbackRes.ok) {
+          const fallbackData = await fallbackRes.json();
+          accumulatedText = fallbackData.answer || '';
+          if (fallbackData.groundingMetadata) {
+            const gm = fallbackData.groundingMetadata;
+            groundingData = {
+              webSearchQueries: gm.webSearchQueries || [],
+              sources: gm.groundingChunks?.map((c: any) => ({
+                title: c.web?.title || 'Web Source',
+                url: c.web?.uri || '#',
+              })) || [],
+            };
+          }
+        }
+      }
+
+      // Mark streaming as finished and set final text
       setThreads((prev) =>
-        prev.map((thread) => {
-          if (thread.id !== currentThreadId) return thread;
-          return {
-            ...thread,
-            messages: thread.messages.map((m) =>
-              m.id === aiMessageId ? { ...m, isStreaming: false } : m
-            ),
-          };
-        })
+        prev.map((thread) =>
+          thread.id === currentThreadId
+            ? {
+                ...thread,
+                messages: thread.messages.map((m) =>
+                  m.id === aiMessageId
+                    ? {
+                        ...m,
+                        text: accumulatedText || 'Could not generate an answer. Please try asking again.',
+                        groundingMetadata: groundingData,
+                        isStreaming: false,
+                      }
+                    : m
+                ),
+              }
+            : thread
+        )
       );
 
       // Trigger follow-up questions suggestions in background
@@ -305,7 +422,68 @@ export default function App() {
         console.log('Request aborted by user.');
         return;
       }
-      console.error('Error answering question:', err);
+      console.warn('Streaming error, attempting non-streaming fallback endpoint:', err);
+
+      try {
+        const fallbackRes = await fetch('/api/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            question: questionText,
+            mode,
+            enableSearch,
+            history: historyPayload,
+            attachments: attachments.map((a) => ({
+              name: a.name,
+              type: a.type,
+              size: a.size,
+              dataUrl: a.dataUrl,
+            })),
+          }),
+        });
+
+        if (fallbackRes.ok) {
+          const fallbackData = await fallbackRes.json();
+          if (fallbackData.answer) {
+            const gm = fallbackData.groundingMetadata;
+            const groundingData = gm
+              ? {
+                  webSearchQueries: gm.webSearchQueries || [],
+                  sources:
+                    gm.groundingChunks?.map((c: any) => ({
+                      title: c.web?.title || 'Web Source',
+                      url: c.web?.uri || '#',
+                    })) || [],
+                }
+              : undefined;
+
+            setThreads((prev) =>
+              prev.map((thread) =>
+                thread.id === currentThreadId
+                  ? {
+                      ...thread,
+                      messages: thread.messages.map((m) =>
+                        m.id === aiMessageId
+                          ? {
+                              ...m,
+                              text: fallbackData.answer,
+                              groundingMetadata: groundingData,
+                              isStreaming: false,
+                              error: undefined,
+                            }
+                          : m
+                      ),
+                    }
+                  : thread
+              )
+            );
+            return;
+          }
+        }
+      } catch (fallbackErr) {
+        console.error('Fallback endpoint also failed:', fallbackErr);
+      }
+
       setThreads((prev) =>
         prev.map((thread) => {
           if (thread.id !== currentThreadId) return thread;
@@ -318,7 +496,7 @@ export default function App() {
                     isStreaming: false,
                     error:
                       err.message ||
-                      'An unexpected error occurred while communicating with Gemini AI.',
+                      'An unexpected error occurred while communicating with Gemini AI. Check your connection or API configuration.',
                   }
                 : m
             ),
@@ -343,6 +521,11 @@ export default function App() {
     }
   }
 
+  // Handle re-asking or regenerating a pair
+  const handleRegeneratePair = (pair: { user: Message; ai?: Message }) => {
+    handleSubmitQuestion(pair.user.text, pair.user.mode, pair.user.attachments || []);
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
       {/* Top Header */}
@@ -359,7 +542,7 @@ export default function App() {
       <main className="flex-1 max-w-4xl w-full mx-auto px-4 sm:px-6 py-6 flex flex-col">
         {/* If thread has messages: Render Q&A Conversation */}
         {pairs.length > 0 ? (
-          <div className="flex-1 space-y-6 pb-24">
+          <div className="flex-1 space-y-6 pb-28">
             {/* Thread Title Bar */}
             <div className="flex items-center justify-between pb-3 border-b border-slate-800/80 text-xs text-slate-400">
               <div className="flex items-center gap-2">
@@ -401,8 +584,10 @@ export default function App() {
                   key={pair.user.id}
                   userMessage={pair.user}
                   aiMessage={pair.ai}
-                  onFollowUpClick={(suggestion) => handleSubmitQuestion(suggestion, undefined, true)}
-                  onReaskMode={(q, m) => handleSubmitQuestion(q, m, false)}
+                  onFollowUpClick={(suggestion) => handleSubmitQuestion(suggestion, undefined, [], true)}
+                  onReaskMode={(q, m) => handleSubmitQuestion(q, m, pair.user.attachments || [])}
+                  onRegenerate={() => handleRegeneratePair(pair)}
+                  onRetry={() => handleRegeneratePair(pair)}
                   isLatest={idx === pairs.length - 1}
                   isBookmarked={currentThread?.isBookmarked}
                   onToggleBookmark={() => handleToggleBookmark(currentThreadId)}
@@ -413,12 +598,12 @@ export default function App() {
             <div ref={messagesEndRef} />
           </div>
         ) : (
-          /* Empty State: Hero Banner & Preset Questions */
-          <div className="flex-1 flex flex-col items-center justify-center py-6 sm:py-10 text-center">
+          /* Empty State: Hero Banner with Minimal Prompt Suggestions */
+          <div className="flex-1 flex flex-col items-center justify-center py-12 sm:py-20 text-center my-auto">
             {/* Badge */}
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs font-semibold mb-6 shadow-sm">
-              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Ask anything · Deep insights & Structured answers</span>
+            <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs font-semibold mb-6 shadow-sm">
+              <Sparkles className="w-4 h-4 text-indigo-400" />
+              <span>Deep Research & Intelligent Question-Answering</span>
             </div>
 
             {/* Headline */}
@@ -426,17 +611,27 @@ export default function App() {
               What question would you like answered today?
             </h2>
 
-            <p className="mt-3 text-slate-400 text-sm sm:text-base max-w-xl">
-              Get comprehensive explanations, step-by-step guides, simple ELI5 analogies, or technical breakdowns powered by Gemini 3.8 Flash.
+            <p className="mt-3 text-slate-400 text-sm sm:text-base max-w-lg">
+              Ask anything, attach PDF documents or images, and get rigorous, well-structured answers from Mugabe AI.
             </p>
 
-            {/* Curated Preset Inspiration Categories */}
-            <PresetQuestions
-              onSelectQuestion={(q, mode) => {
-                setCurrentMode(mode);
-                handleSubmitQuestion(q, mode, false);
-              }}
-            />
+            {/* Sleek, Non-intrusive Suggested Quick Prompts */}
+            <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-2.5 w-full max-w-xl text-left">
+              {SUGGESTED_PROMPTS.map((prompt, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => {
+                    setCurrentMode(prompt.mode);
+                    handleSubmitQuestion(prompt.title, prompt.mode);
+                  }}
+                  className="flex items-center justify-between p-3 rounded-xl bg-slate-900/60 hover:bg-slate-850 border border-slate-800/80 hover:border-indigo-500/40 text-xs text-slate-300 hover:text-white transition group cursor-pointer shadow-sm"
+                >
+                  <span className="truncate pr-2 font-medium">{prompt.title}</span>
+                  <ArrowUpRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-indigo-400 shrink-0 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -453,13 +648,14 @@ export default function App() {
 
           {/* Question Input Box */}
           <QuestionInput
-            onSubmit={(q) => handleSubmitQuestion(q)}
+            onSubmit={(q, files) => handleSubmitQuestion(q, undefined, files)}
+            onStopGeneration={handleStopGeneration}
             isLoading={isStreaming}
             mode={currentMode}
             placeholder={
               pairs.length > 0
-                ? 'Ask a follow-up question or explore deeper...'
-                : 'Ask any question... (e.g. How does photosynthesis work?, Explain Docker vs Kubernetes)'
+                ? 'Ask a follow-up question or attach documents/images...'
+                : 'Ask any question or attach files... (e.g. How does photosynthesis work?, Analyze this PDF)'
             }
           />
         </div>

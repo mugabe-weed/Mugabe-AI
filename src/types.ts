@@ -1,4 +1,4 @@
-export type AnswerMode = 'balanced' | 'concise' | 'eli5' | 'steps' | 'technical';
+export type AnswerMode = 'balanced' | 'brainstorm' | 'concise' | 'eli5' | 'steps' | 'technical';
 
 export interface GroundingSource {
   title: string;
@@ -8,6 +8,16 @@ export interface GroundingSource {
 export interface GroundingMetadata {
   webSearchQueries?: string[];
   sources?: GroundingSource[];
+}
+
+export interface AttachedFile {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+  dataUrl: string; // Base64 data URI
+  isImage?: boolean;
+  isDocument?: boolean;
 }
 
 export interface Message {
@@ -20,6 +30,7 @@ export interface Message {
   isStreaming?: boolean;
   error?: string;
   followUpSuggestions?: string[];
+  attachments?: AttachedFile[];
 }
 
 export interface Thread {
